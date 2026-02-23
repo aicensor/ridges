@@ -50,9 +50,9 @@ def get_num_docker_containers() -> int:
 # TODO ADAM: optimize
 def stop_and_delete_all_docker_containers() -> None:
     docker_client = get_docker_client()
-    
+
     logger.info(f"Stopping and deleting all containers...")
-    
+
     for container in docker_client.containers.list(all=True, filters={"name": f"^({DOCKER_PREFIX}|{SWEBENCH_DOCKER_PREFIX})"}):
         logger.info(f"Stopping and deleting container {container.name}...")
 
@@ -61,7 +61,7 @@ def stop_and_delete_all_docker_containers() -> None:
         except Exception as e:
             logger.warning(f"Failed to stop container {container.name}: {e}")
             # continue
-        
+
         try:
             container.remove(force=True)
         except Exception as e:
@@ -71,8 +71,38 @@ def stop_and_delete_all_docker_containers() -> None:
         logger.info(f"Stopped and deleted container {container.name}")
 
     docker_client.containers.prune()
-    
+
     logger.info(f"Stopped and deleted all containers")
+
+
+
+def stop_and_delete_session_docker_containers(session_id: str) -> None:
+    """Stop and delete only Docker containers belonging to a specific session."""
+    docker_client = get_docker_client()
+
+    session_prefix = f"{DOCKER_PREFIX}-{session_id}"
+    logger.info(f"Stopping and deleting containers for session '{session_id}' (prefix: {session_prefix})...")
+
+    for container in docker_client.containers.list(all=True):
+        if not container.name.startswith(session_prefix):
+            continue
+
+        logger.info(f"Stopping and deleting container {container.name}...")
+
+        try:
+            container.stop(timeout=3)
+        except Exception as e:
+            logger.warning(f"Failed to stop container {container.name}: {e}")
+
+        try:
+            container.remove(force=True)
+        except Exception as e:
+            logger.warning(f"Failed to remove container {container.name}: {e}")
+            continue
+
+        logger.info(f"Stopped and deleted container {container.name}")
+
+    logger.info(f"Stopped and deleted all containers for session '{session_id}'")
 
 
 

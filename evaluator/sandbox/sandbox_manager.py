@@ -7,27 +7,41 @@ import utils.logger as logger
 from typing import Any, Dict, Callable
 from utils.temp import create_temp_dir, delete_temp_dir
 from evaluator.models import Sandbox, SandboxResultWithLogs
-from utils.docker import DOCKER_PREFIX, get_docker_client, build_docker_image, create_internal_docker_network, connect_docker_container_to_internet, stop_and_delete_all_docker_containers
+from utils.docker import DOCKER_PREFIX, get_docker_client, build_docker_image, create_internal_docker_network, connect_docker_container_to_internet, stop_and_delete_all_docker_containers, stop_and_delete_session_docker_containers
 
 
 
-SANDBOX_NETWORK_NAME = f"{DOCKER_PREFIX}-sandbox-network"
+DEFAULT_SANDBOX_NETWORK_NAME = f"{DOCKER_PREFIX}-sandbox-network"
 
-SANDBOX_PROXY_HOST = f"{DOCKER_PREFIX}-sandbox-proxy"
+DEFAULT_SANDBOX_PROXY_HOST = f"{DOCKER_PREFIX}-sandbox-proxy"
 SANDBOX_PROXY_PORT = 80
 
 
 
 class SandboxManager:
-    def __init__(self, inference_gateway_url: str):
+    def __init__(self, inference_gateway_url: str, session_id: str = None):
+        self.session_id = session_id
+
+        if session_id:
+            self.sandbox_network_name = f"{DOCKER_PREFIX}-{session_id}-sandbox-network"
+            self.sandbox_proxy_host = f"{DOCKER_PREFIX}-{session_id}-sandbox-proxy"
+            self.container_prefix = f"{DOCKER_PREFIX}-{session_id}"
+        else:
+            self.sandbox_network_name = DEFAULT_SANDBOX_NETWORK_NAME
+            self.sandbox_proxy_host = DEFAULT_SANDBOX_PROXY_HOST
+            self.container_prefix = DOCKER_PREFIX
+
         # Setup inference gateway
         self._check_inference_gateway(inference_gateway_url)
 
-        # Setup Docker
-        stop_and_delete_all_docker_containers()
+        # Setup Docker — only clean up containers for this session
+        if session_id:
+            stop_and_delete_session_docker_containers(session_id)
+        else:
+            stop_and_delete_all_docker_containers()
 
         # Setup sandbox-network
-        create_internal_docker_network(SANDBOX_NETWORK_NAME)
+        create_internal_docker_network(self.sandbox_network_name)
 
         # Setup sandbox-image
         if os.getenv("CXII_NO_BUILD_SANDBOX_IMAGE") is None:
@@ -65,20 +79,20 @@ class SandboxManager:
     def _create_sandbox_proxy(self, gateway_url):
         """
         Create the sandbox proxy server.
-        
+
         This is a special sandbox that runs a proxy server (nginx).
         This is the only sandbox that can access the internet.
-        
+
         The other sandboxes cannot directly access the internet.
         So to do inference, they send requests to this proxy server, which forwards appropriate requests to the inference gateway.
         """
-  
-        logger.info("Running sandbox proxy")
+
+        logger.info(f"Running sandbox proxy: {self.sandbox_proxy_host}")
 
         self.proxy_container = get_docker_client().containers.run(
-            name=SANDBOX_PROXY_HOST,
+            name=self.sandbox_proxy_host,
             image=f"{DOCKER_PREFIX}-sandbox-proxy-image",
-            network=SANDBOX_NETWORK_NAME,
+            network=self.sandbox_network_name,
             environment={
                 "GATEWAY_URL": gateway_url,
                 "GATEWAY_HOST": gateway_url.split("://")[1].split(":")[0]
@@ -100,12 +114,12 @@ class SandboxManager:
         on_mount: Callable[[str], None] = None,
         timeout_seconds: int = None
     ) -> Sandbox:
-        name = f"{DOCKER_PREFIX}-{name}"
-        
+        name = f"{self.container_prefix}-{name}"
+
         # Create temporary directory
         temp_dir = create_temp_dir()
         logger.debug(f"Created temporary directory for sandbox <{name}>: {temp_dir}")
-        
+
         if on_mount is not None:
             # Call on_mount
             logger.debug(f"Calling on_mount() for sandbox <{name}>...")
@@ -122,7 +136,7 @@ class SandboxManager:
         temp_script_path = os.path.join(temp_dir, script_name)
         shutil.copy2(script_path, temp_script_path)
         logger.debug(f"Copied script for sandbox <{name}>: {script_name} --> {temp_script_path}")
-        
+
         # Create input.json
         temp_input_json_path = os.path.join(temp_dir, "input.json")
         with open(temp_input_json_path, "w") as f:
@@ -140,11 +154,11 @@ class SandboxManager:
             name=name,
             image=f"{DOCKER_PREFIX}-sandbox-image",
             volumes={temp_dir: {"bind": "/sandbox", "mode": "rw"}},
-            network=SANDBOX_NETWORK_NAME,
+            network=self.sandbox_network_name,
             environment={
                 "PYTHONUNBUFFERED": "1",
                 "PYTHONDONTWRITEBYTECODE": "1", # No __pycache__
-                "SANDBOX_PROXY_URL": f"http://{SANDBOX_PROXY_HOST}:{SANDBOX_PROXY_PORT}",
+                "SANDBOX_PROXY_URL": f"http://{self.sandbox_proxy_host}:{SANDBOX_PROXY_PORT}",
                 **env_vars
             },
             command=command,
@@ -164,19 +178,22 @@ class SandboxManager:
         self,
         sandbox: Sandbox
     ) -> SandboxResultWithLogs:
-        
+
         try:
             sandbox.container.wait(timeout=sandbox.timeout_seconds)
 
+            # Always capture logs first (before any potential failure)
+            logs = sandbox.container.logs().decode("utf-8")
+
             # Load /sandbox/output.json
             temp_output_json_path = os.path.join(sandbox.temp_dir, "output.json")
-            with open(temp_output_json_path, "r") as f:
-                output = json.load(f)
+            try:
+                with open(temp_output_json_path, "r") as f:
+                    output = json.load(f)
+            except FileNotFoundError:
+                logger.error(f"output.json not found for sandbox <{sandbox.name}>. Container logs:\n{logs[-2000:]}")
+                raise
             logger.debug(f"Loaded output.json for sandbox <{sandbox.name}>: {temp_output_json_path}")
-
-            # Get logs
-            logs = sandbox.container.logs().decode("utf-8")
-            # logger.info(logs)
 
             return SandboxResultWithLogs(**output, logs=logs)
         finally:

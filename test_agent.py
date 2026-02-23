@@ -36,6 +36,7 @@ global running_eval_timeout_seconds
 global include_solutions
 global include_tests
 global polyglot_unpatched
+global session_id
 
 global problem_suites
 
@@ -205,7 +206,7 @@ async def run_problems(agent_code: str, problem_names: List[str]):
 
 
     
-    sandbox_manager = SandboxManager(inference_gateway_url)
+    sandbox_manager = SandboxManager(inference_gateway_url, session_id=session_id)
 
     SWEBENCH_VERIFIED_SUITE.prebuild_problem_images(problem_names)
 
@@ -226,7 +227,8 @@ async def run_problems(agent_code: str, problem_names: List[str]):
 @click.option("--include-solutions", "_include_solutions", is_flag=True, help="Whether or not to include solutions in the evaluation")
 @click.option("--include-tests", "_include_tests", is_flag=True, help="Whether or not to include tests in the evaluation")
 @click.option("--polyglot-unpatched", "polyglot_unpatched", is_flag=True, help="Whether or not to use the unpatched Polyglot suite")
-def cli(inference_url: str, _agent_path: str, agent_timeout: int, eval_timeout: int, _include_solutions: bool, _include_tests: bool, polyglot_unpatched: bool):
+@click.option("--session-id", "_session_id", default=None, type=str, help="Unique session ID to isolate Docker resources when running multiple agents concurrently (e.g., session1, session2)")
+def cli(inference_url: str, _agent_path: str, agent_timeout: int, eval_timeout: int, _include_solutions: bool, _include_tests: bool, polyglot_unpatched: bool, _session_id: str):
     global inference_gateway_url
     global agent_path
     global agent_code
@@ -234,6 +236,7 @@ def cli(inference_url: str, _agent_path: str, agent_timeout: int, eval_timeout: 
     global running_eval_timeout_seconds
     global include_solutions
     global include_tests
+    global session_id
 
     global problem_suites
 
@@ -245,6 +248,7 @@ def cli(inference_url: str, _agent_path: str, agent_timeout: int, eval_timeout: 
     running_eval_timeout_seconds = eval_timeout
     include_solutions = _include_solutions
     include_tests = _include_tests
+    session_id = _session_id
 
     if include_solutions:
         logger.warning("Including Solutions!")
