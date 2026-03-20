@@ -1,6 +1,6 @@
 # Bittensor & Ridges AI (Subnet 62) — Setup Guide
 
-> A step-by-step guide for installing Bittensor, creating a wallet, and registering on Ridges AI (SN62) on **Ubuntu 22.04** with **Python 3.13**.
+> A step-by-step guide for installing Bittensor, wiring in an existing wallet, and registering on Ridges AI (SN62) on **Ubuntu 24.04** with **Python 3.13**.
 
 ---
 
@@ -22,7 +22,7 @@
 
 | Requirement       | Details                                                      |
 | ----------------- | ------------------------------------------------------------ |
-| OS                | Ubuntu 22.04                                                |
+| OS                | Ubuntu 24.04 (Noble)                                       |
 | Python            | 3.13                                                        |
 | CPU               | 4+ vCPU (2 vCPU too slow — Docker builds take 1hr+)        |
 | RAM               | 8–16 GB                                                     |
@@ -35,12 +35,16 @@
 
 ## 2. Install System Dependencies
 
+You can do this manually, or use the **one‑click deployer** in [Section 10](#10-one-click-deployer-optional).
+
+Manual steps:
+
 ```bash
 # Update system packages
 sudo apt update && sudo apt upgrade -y
 
 # Install build tools
-sudo apt install -y build-essential curl git software-properties-common
+sudo apt install -y build-essential curl git software-properties-common ca-certificates gnupg
 
 # Install Rust (required by Bittensor on Linux)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -49,14 +53,25 @@ source $HOME/.cargo/env
 # Install UV package manager (recommended by Ridges)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install Docker (needed for Ridges agent sandboxes)
-sudo apt install -y docker.io
+# Install Docker Engine from Docker's official apt repo (recommended)
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/ubuntu noble stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 sudo systemctl enable docker && sudo systemctl start docker
 sudo usermod -aG docker $USER
 
 # Configure git identity (required by Ridges sandbox for commits)
 git config --global user.email "lifestream@ridges.ai"
 git config --global user.name "lifestream"
+
+# Mark the ridges repo as safe for git (avoids “dubious ownership” errors)
+git config --global --add safe.directory /home/ubuntu/ridges
 ```
 
 ---
@@ -99,31 +114,37 @@ python3 -c "import bittensor; print(bittensor.__version__)"
 
 ---
 
-## 5. Create a Wallet
+## 5. Create or Import a Wallet
 
-### 5.1 Create coldkey + hotkey
+### 5.1 Use an existing wallet (recommended if you already have TAO)
+
+Copy your existing `wallets` directory onto the machine, for example to:
+
+```bash
+/home/ubuntu/wallets
+```
+
+Then verify it:
+
+```bash
+btcli wallet overview \
+  --wallet.name lifestream \
+  --wallet.path /home/ubuntu/wallets/
+```
+
+> ⚠️ **CRITICAL:** Treat your wallet directory and mnemonic phrase as highly sensitive.  
+> Never paste your seed into this server or share it with anyone.
+
+### 5.2 (Optional) Create a new wallet with BTCLI
+
+Only do this if you don't already have a funded wallet:
 
 ```bash
 btcli wallet create \
   --wallet.name lifestream \
   --wallet.hotkey default \
-  --wallet.path /home/lifestream/wallets/
+  --wallet.path /home/ubuntu/wallets/
 ```
-
-When prompted:
-- **Wallet path:** `/home/lifestream/wallets/` (or your preferred location)
-- **Number of words:** `12`
-- **Password:** Set a strong password to encrypt the key
-
-### 5.2 Verify wallet
-
-```bash
-btcli wallet overview \
-  --wallet.name lifestream \
-  --wallet.path /home/lifestream/wallets/
-```
-
-> ⚠️ **CRITICAL:** Write down your 12-word mnemonic seed phrase on paper and store it in a safe place. If you lose it, you lose all your TAO permanently. Never share it with anyone.
 
 ---
 
@@ -136,7 +157,7 @@ You need TAO tokens to register on a subnet.
 ```bash
 btcli wallet balance \
   --wallet.name lifestream \
-  --wallet.path /home/lifestream/wallets/
+  --wallet.path /home/ubuntu/wallets/
 ```
 
 ### 6.2 Buy & transfer TAO
@@ -150,7 +171,7 @@ btcli wallet balance \
 ```bash
 btcli wallet balance \
   --wallet.name lifestream \
-  --wallet.path /home/lifestream/wallets/
+  --wallet.path /home/ubuntu/wallets/
 ```
 
 ---
@@ -161,7 +182,7 @@ btcli wallet balance \
 btcli subnet register \
   --wallet.name lifestream \
   --wallet.hotkey default \
-  --wallet.path /home/lifestream/wallets/ \
+  --wallet.path /home/ubuntu/wallets/ \
   --netuid 62
 ```
 
@@ -174,7 +195,7 @@ btcli subnet register \
 ```bash
 btcli subnet list \
   --wallet.name lifestream \
-  --wallet.path /home/lifestream/wallets/
+  --wallet.path /home/ubuntu/wallets/
 ```
 
 ---
@@ -184,7 +205,7 @@ btcli subnet list \
 ### 8.1 Clone the repository
 
 ```bash
-cd /home/lifestream
+cd /home/ubuntu
 git clone https://github.com/ridgesai/ridges
 cd ridges
 ```
@@ -209,7 +230,7 @@ Edit `inference_gateway/.env` and set:
 NETUID=62
 WALLET_NAME=lifestream
 WALLET_HOTKEY=default
-WALLET_PATH=/home/lifestream/wallets/
+WALLET_PATH=/home/ubuntu/wallets/
 CHUTES_API_KEY=your_chutes_api_key_here
 USE_DATABASE=False
 ```
@@ -230,9 +251,14 @@ USE_DATABASE=False
 In a **separate terminal**:
 
 ```bash
-cd /home/lifestream/ridges
-source .venv/bin/activate
-uv run -m inference_gateway.main
+cd /home/ubuntu/ridges
+chmod +x run_gateway.sh run_gateway_tmux.sh
+
+# Simple foreground run
+./run_gateway.sh
+
+# Or: keep it running inside tmux
+./run_gateway_tmux.sh
 ```
 
 Verify it's listening on all interfaces:
@@ -263,30 +289,17 @@ Use `--session-id` to isolate Docker resources when running multiple agents conc
 ```bash
 cd /home/lifestream/ridges
 
-# Run a single problem test (replace IP with your host IP from step 8.5)
-uv run python test_agent.py \
-  --inference-url http://<YOUR_HOST_IP>:1234 \
-  --agent-path ./agent.py \
-  test-problem django__django-11138
+# Run a single problem test with your agent (example: rest-api-js)
+./run_agent_test_rest_api_js.sh
 
-# Run with a session ID (useful for parallel runs)
-uv run python test_agent.py \
-  --inference-url http://<YOUR_HOST_IP>:1234 \
-  --agent-path ./agent.py \
-  --session-id s1 \
-  test-problem rest-api-js
+# Run a problem set with a session ID (example: problems-0220 with session s10)
+./run_agent_test_problems_0220_s10.sh
 
-# List available problem sets
+# Or run test_agent.py directly for custom runs, e.g.:
 uv run python test_agent.py \
   --inference-url http://<YOUR_HOST_IP>:1234 \
-  --agent-path ./agent.py \
+  --agent-path ./top1-krav40.py \
   list-problem-sets
-
-# Run a small test set (10 problems)
-uv run python test_agent.py \
-  --inference-url http://<YOUR_HOST_IP>:1234 \
-  --agent-path ./agent.py \
-  test-problem-set screener-small
 ```
 
 Results are saved to `test_agent_results/`.
@@ -298,16 +311,34 @@ Results are saved to `test_agent_results/`.
 
 ### 8.7 Upload your agent (start mining)
 
-```bash
-cd /home/lifestream/ridges
+> **API URL Note:** The default API URL `https://platform-v2.ridges.ai` may be
+> blocked by Cloudflare from certain IPs. If you get 403 errors, update
+> `DEFAULT_API_BASE_URL` in `ridges.py` to `https://frontend-platform-api.ridges.ai`
+> or use the `--url` flag:
 
+```bash
+cd /home/ubuntu/ridges
+
+# Option A: Use the --url flag
+uv run python ridges.py --url https://frontend-platform-api.ridges.ai upload \
+  --file ./agent.py \
+  --coldkey-name lifestream \
+  --hotkey-name default
+
+# Option B: Use the default (after editing ridges.py)
 uv run python ridges.py upload \
   --file ./agent.py \
   --coldkey-name lifestream \
   --hotkey-name default
 ```
 
-This will validate your agent, show the evaluation pricing, and upload it after you confirm payment.
+This will:
+1. Validate your agent
+2. Show the evaluation pricing (~0.23 TAO / ~$42 USD)
+3. Upload it after you confirm payment
+
+> **Balance requirement:** Your coldkey must have enough TAO to cover the eval fee.
+> Check with: `btcli wallet balance --wallet.name lifestream --wallet.path /home/ubuntu/wallets/`
 
 ---
 
@@ -317,16 +348,16 @@ All commands below use the custom wallet path. To avoid typing it every time, ad
 
 ```bash
 mkdir -p ~/.bittensor
-echo "wallet_path: /home/lifestream/wallets/" >> ~/.bittensor/config.yml
+echo "wallet_path: /home/ubuntu/wallets/" >> ~/.bittensor/config.yml
 ```
 
 ### Wallet
 
 | Command | Description |
 | ------- | ----------- |
-| `btcli wallet overview --wallet.name lifestream --wallet.path /home/lifestream/wallets/` | Wallet overview |
-| `btcli wallet balance --wallet.name lifestream --wallet.path /home/lifestream/wallets/` | Check TAO balance |
-| `btcli wallet list --wallet.path /home/lifestream/wallets/` | List all wallets |
+| `btcli wallet overview --wallet.name lifestream --wallet.path /home/ubuntu/wallets/` | Wallet overview |
+| `btcli wallet balance --wallet.name lifestream --wallet.path /home/ubuntu/wallets/` | Check TAO balance |
+| `btcli wallet list --wallet.path /home/ubuntu/wallets/` | List all wallets |
 
 ### Subnet
 
@@ -339,8 +370,44 @@ echo "wallet_path: /home/lifestream/wallets/" >> ~/.bittensor/config.yml
 
 | Command | Description |
 | ------- | ----------- |
-| `btcli stake add --wallet.name lifestream --wallet.path /home/lifestream/wallets/` | Stake TAO |
-| `btcli stake remove --wallet.name lifestream --wallet.path /home/lifestream/wallets/` | Unstake TAO |
+| `btcli stake add --wallet.name lifestream --wallet.path /home/ubuntu/wallets/` | Stake TAO |
+| `btcli stake remove --wallet.name lifestream --wallet.path /home/ubuntu/wallets/` | Unstake TAO |
+
+---
+
+## 10. One‑Click Deployer (Optional)
+
+If you're setting up a fresh Ubuntu 24.04 server, you can use a single script to:
+
+- Install system dependencies (Rust, uv, Docker, Python 3.13)
+- Clone the `ridges` repo
+- Create the `.venv` and install dependencies
+- Configure `inference_gateway/.env`
+- Create the helper scripts:
+  - `run_gateway.sh`
+  - `run_gateway_tmux.sh`
+  - `run_agent_test_rest_api_js.sh`
+  - `run_agent_test_problems_0220_s10.sh`
+
+### 10.1 Usage
+
+On a fresh machine:
+
+```bash
+cd /home/ubuntu
+curl -O https://raw.githubusercontent.com/your-user-or-org/your-repo/main/ridges-deploy.sh
+chmod +x ridges-deploy.sh
+./ridges-deploy.sh
+```
+
+After it completes:
+
+```bash
+cd /home/ubuntu/ridges
+./run_gateway_tmux.sh                         # start gateway in tmux
+./run_agent_test_rest_api_js.sh              # quick smoke test
+./run_agent_test_problems_0220_s10.sh        # run the problems-0220 problem set
+```
 
 ---
 
